@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+stripe
+psycopg2-binary
+openai
+langchain-openai
+langchain-core
+python-dotenv
