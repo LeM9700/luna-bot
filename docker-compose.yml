@@ -1,0 +1,136 @@
+version: '3.9'
+
+services:
+
+  # ── Base de données ────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB:       luna
+      POSTGRES_USER:     luna
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lunapass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U luna"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Memory Service (port 8002) ─────────────────────────────────────────
+  memory-service:
+    build:
+      context: ./services/memory-service
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL:    postgresql://luna:${POSTGRES_PASSWORD:-lunapass}@postgres:5432/luna
+      OPENAI_API_KEY:  ${OPENAI_API_KEY}
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Personality Service (port 8003) ────────────────────────────────────
+  personality-service:
+    build:
+      context: ./services/personality-service
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL:    postgresql://luna:${POSTGRES_PASSWORD:-lunapass}@postgres:5432/luna
+      OPENAI_API_KEY:  ${OPENAI_API_KEY}
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Chat Service (port 8001) ───────────────────────────────────────────
+  chat-service:
+    build:
+      context: ./services/chat-service
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL:          postgresql://luna:${POSTGRES_PASSWORD:-lunapass}@postgres:5432/luna
+      OPENAI_API_KEY:        ${OPENAI_API_KEY}
+      MEMORY_SERVICE_URL:    http://memory-service:8002
+      PERSONALITY_SERVICE_URL: http://personality-service:8003
+    ports:
+      - "8001:8001"
+    depends_on:
+      - memory-service
+      - personality-service
+    restart: unless-stopped
+
+  # ── Payment Service (port 8004) ────────────────────────────────────────
+  payment-service:
+    build:
+      context: ./services/payment-service
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL:          postgresql://luna:${POSTGRES_PASSWORD:-lunapass}@postgres:5432/luna
+      STRIPE_SECRET_KEY:     ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PRICE_ID:       ${STRIPE_PRICE_ID}
+      APP_URL:               ${APP_URL}
+    ports:
+      - "8004:8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Training Service (port 8005) ───────────────────────────────────────
+  training-service:
+    build:
+      context: ./services/training-service
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL:   postgresql://luna:${POSTGRES_PASSWORD:-lunapass}@postgres:5432/luna
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "8005:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Bot Service ────────────────────────────────────────────────────────
+  bot-service:
+    build:
+      context: ./bot-service
+      dockerfile: Dockerfile
+    environment:
+      TELEGRAM_TOKEN:          ${TELEGRAM_TOKEN}
+      ENCRYPTION_KEY:          ${ENCRYPTION_KEY}
+      CHAT_SERVICE_URL:        http://chat-service:8001
+      MEMORY_SERVICE_URL:      http://memory-service:8002
+      PERSONALITY_SERVICE_URL: http://personality-service:8003
+      PAYMENT_SERVICE_URL:     http://payment-service:8004
+    depends_on:
+      - chat-service
+      - memory-service
+      - personality-service
+      - payment-service
+    restart: unless-stopped
+
+  # ── Web Interface (port 3000) ──────────────────────────────────────────
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - chat-service
+      - memory-service
+      - training-service
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
